@@ -74,8 +74,6 @@ export function handleFrame(data: Buffer, isBinary: boolean): ServerResponse {
     );
   }
 
-  console.log("Recieved", result)
-
   return {
     type: "ack",
     messageId: result.data.messageId,

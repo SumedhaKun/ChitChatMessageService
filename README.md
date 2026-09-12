@@ -110,6 +110,30 @@ socket.addEventListener("message", (event) => {
 });
 ```
 
+## Deploy to Vercel
+
+Import the GitHub repository into Vercel or deploy it with the Vercel CLI:
+
+```sh
+npx vercel
+npx vercel --prod
+```
+
+Fluid Compute is enabled in `vercel.json`, as required by Vercel WebSockets.
+After deployment, connect to:
+
+```text
+wss://your-domain.vercel.app/api/server
+```
+
+Opening `https://your-domain.vercel.app/api/server` without a WebSocket upgrade
+returns `{ "status": "ok" }`.
+
+Vercel WebSocket support is currently in public beta and requires WebSocket
+permissions on the Vercel account. Connections close when the Function reaches
+its maximum duration (configured to 300 seconds), so production clients must
+reconnect with backoff after a close event.
+
 ## Operational behavior
 
 The server logs structured connection lifecycle and rejection events. Message
