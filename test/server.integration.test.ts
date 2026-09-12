@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createServer, type Server as HttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import WebSocket, { type RawData, type WebSocketServer } from "ws";
@@ -81,6 +82,18 @@ async function closeClient(client: WebSocket): Promise<void> {
   });
 }
 
+async function closeHttpServer(server: HttpServer): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error === undefined) {
+        resolve();
+      } else {
+        reject(error);
+      }
+    });
+  });
+}
+
 describe("WebSocket message server", () => {
   let server: WebSocketServer;
   let url: string;
@@ -139,5 +152,38 @@ describe("WebSocket message server", () => {
     });
 
     expect(closeCode).toBe(1009);
+  });
+
+  it("attaches to an existing HTTP server for hosted deployments", async () => {
+    const httpServer = createServer();
+    const webSocketServer = createMessageServer({
+      httpServer,
+      logger: silentLogger,
+    });
+    httpServer.listen(0, "127.0.0.1");
+    await waitForListening(webSocketServer);
+
+    const address = httpServer.address() as AddressInfo;
+    const client = await openClient(
+      `ws://127.0.0.1:${address.port}/api/server`,
+    );
+    const messageId = randomUUID();
+    client.send(
+      JSON.stringify({
+        type: "message",
+        messageId,
+        conversationId: randomUUID(),
+        content: "Hosted transport",
+      }),
+    );
+
+    await expect(receiveJson(client)).resolves.toMatchObject({
+      type: "ack",
+      messageId,
+    });
+
+    await closeClient(client);
+    await closeMessageServer(webSocketServer);
+    await closeHttpServer(httpServer);
   });
 });

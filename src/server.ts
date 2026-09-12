@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { Server as HttpServer } from "node:http";
 import { pathToFileURL } from "node:url";
 
 import { WebSocket, WebSocketServer, type RawData } from "ws";
@@ -17,6 +18,7 @@ export interface Logger {
 
 export interface ServerOptions {
   port?: number;
+  httpServer?: HttpServer;
   logger?: Logger;
 }
 
@@ -46,19 +48,25 @@ function normalizeRawData(data: RawData): Buffer {
 export function createMessageServer(
   options: ServerOptions = {},
 ): WebSocketServer {
-  const port = options.port ?? readPort();
   const logger = options.logger ?? console;
-  const server = new WebSocketServer({
-    port,
-    maxPayload: MAX_TRANSPORT_FRAME_BYTES,
-  });
+  const server =
+    options.httpServer === undefined
+      ? new WebSocketServer({
+          port: options.port ?? readPort(),
+          maxPayload: MAX_TRANSPORT_FRAME_BYTES,
+        })
+      : new WebSocketServer({
+          server: options.httpServer,
+          maxPayload: MAX_TRANSPORT_FRAME_BYTES,
+        });
 
   server.on("listening", () => {
     const address = server.address();
     logger.info({
       event: "server_listening",
-      port:
-        typeof address === "object" && address !== null ? address.port : port,
+      ...(typeof address === "object" && address !== null
+        ? { port: address.port }
+        : {}),
     });
   });
 
