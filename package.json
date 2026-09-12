@@ -16,7 +16,7 @@
     "format:check": "prettier --check ."
   },
   "engines": {
-    "node": ">=22"
+    "node": "22.x"
   },
   "keywords": [
     "websocket",
