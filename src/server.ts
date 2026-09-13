@@ -7,7 +7,6 @@ import { pathToFileURL } from "node:url";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 
 import { createHttpApp } from "./api/app.js";
-import { createMessage } from "./api/repository.js";
 import {
   createSupabaseAuthenticator,
   type Authenticate,
@@ -18,6 +17,8 @@ import {
   getDatabaseConnection,
   type Database,
 } from "./db/client.js";
+import { persistAndPublishMessage } from "./kafka/persist.js";
+import type { PublishMessageCreated } from "./kafka/publisher.js";
 import { handleFrame, type PersistMessage } from "./message-handler.js";
 import { MAX_TRANSPORT_FRAME_BYTES } from "./protocol.js";
 
@@ -37,6 +38,7 @@ export interface ServerOptions {
   authenticate?: Authenticate;
   getDatabase?: () => Database;
   persistMessage?: PersistMessage;
+  publishMessageCreated?: PublishMessageCreated;
 }
 
 export interface ServiceServers {
@@ -49,6 +51,7 @@ export interface ServiceServerOptions {
   authenticate?: Authenticate;
   getDatabase?: () => Database;
   persistMessage?: PersistMessage;
+  publishMessageCreated?: PublishMessageCreated;
 }
 
 export function readPort(value = process.env.PORT): number {
@@ -62,6 +65,26 @@ export function readPort(value = process.env.PORT): number {
   }
 
   return port;
+}
+
+function defaultPublishMessageCreated(): PublishMessageCreated {
+  return async (message) => {
+    const { getMessageCreatedPublisher } = await import("./kafka/client.js");
+    await getMessageCreatedPublisher().publish(message);
+  };
+}
+
+function defaultPersistMessage(
+  getDatabase: () => Database,
+  publishMessageCreated: PublishMessageCreated,
+): PersistMessage {
+  return async (input, senderId) =>
+    await persistAndPublishMessage(
+      getDatabase(),
+      publishMessageCreated,
+      input,
+      senderId,
+    );
 }
 
 function normalizeRawData(data: RawData): Buffer {
@@ -82,8 +105,10 @@ export function createMessageServer(
   const getDatabase = options.getDatabase ?? (() => getDatabaseConnection().db);
   const persistMessage =
     options.persistMessage ??
-    (async (input, senderId) =>
-      await createMessage(getDatabase(), input, senderId));
+    defaultPersistMessage(
+      getDatabase,
+      options.publishMessageCreated ?? defaultPublishMessageCreated(),
+    );
   const server =
     options.httpServer === undefined
       ? new WebSocketServer({
@@ -184,17 +209,25 @@ export function createServiceServers(
   const logger = options.logger ?? console;
   const authenticate = options.authenticate ?? createSupabaseAuthenticator();
   const getDatabase = options.getDatabase ?? (() => getDatabaseConnection().db);
+  const publishMessageCreated =
+    options.publishMessageCreated ?? defaultPublishMessageCreated();
+  const persistMessage =
+    options.persistMessage ??
+    defaultPersistMessage(getDatabase, publishMessageCreated);
   const httpServer = createServer(
-    createHttpApp({ logger, authenticate, getDatabase }),
+    createHttpApp({
+      logger,
+      authenticate,
+      getDatabase,
+      publishMessageCreated,
+    }),
   );
   const webSocketServer = createMessageServer({
     httpServer,
     logger,
     authenticate,
     getDatabase,
-    ...(options.persistMessage === undefined
-      ? {}
-      : { persistMessage: options.persistMessage }),
+    persistMessage,
   });
   return { httpServer, webSocketServer };
 }
@@ -243,6 +276,8 @@ export async function closeServiceServers(
   }
 
   await closeDatabaseConnection();
+  const { closeMessageCreatedPublisher } = await import("./kafka/client.js");
+  await closeMessageCreatedPublisher();
 }
 
 function run(): void {

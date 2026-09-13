@@ -13,3 +13,15 @@ services:
         sync: false
       - key: SUPABASE_ANON_KEY
         sync: false
+      - key: CLIENT_ORIGIN
+        sync: false
+      - key: KAFKA_BROKERS
+        sync: false
+      - key: KAFKA_CLIENT_ID
+        value: chitchat-message-service
+      - key: KAFKA_SSL
+        value: "true"
+      - key: KAFKA_API_KEY
+        sync: false
+      - key: KAFKA_API_SECRET
+        sync: false

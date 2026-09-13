@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto";
 
 import request from "supertest";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { z } from "zod";
 
 import { createHttpApp } from "../src/api/app.js";
@@ -10,7 +18,7 @@ import {
   type DatabaseConnection,
 } from "../src/db/client.js";
 import { runDatabaseMigrations } from "../src/db/migrations.js";
-import { conversation } from "../src/db/schema.js";
+import { conversation, type MessageRow } from "../src/db/schema.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const describeWithDatabase =
@@ -39,6 +47,7 @@ const messagePageResponseSchema = z.object({
 describeWithDatabase("conversation and message HTTP API", () => {
   let connection: DatabaseConnection;
   let app: ReturnType<typeof createHttpApp>;
+  const publishedMessages: MessageRow[] = [];
 
   beforeAll(async () => {
     connection = createDatabaseConnection(databaseUrl ?? "");
@@ -50,10 +59,15 @@ describeWithDatabase("conversation and message HTTP API", () => {
           id: token,
           email: "person@example.com",
         }),
+      publishMessageCreated: (message) => {
+        publishedMessages.push(message);
+        return Promise.resolve();
+      },
     });
   });
 
   afterEach(async () => {
+    publishedMessages.length = 0;
     await connection.db.delete(conversation);
   });
 
@@ -116,6 +130,56 @@ describeWithDatabase("conversation and message HTTP API", () => {
         memberIds: [userId],
       }),
     ]);
+  });
+
+  it("publishes messageCreated after persist and republishes identical retries", async () => {
+    const userId = randomUUID();
+    const conversationResponse = await request(app)
+      .post("/conversation")
+      .set("authorization", `Bearer ${userId}`)
+      .send({
+        name: "Friends",
+        is_group: true,
+        user_ids: [userId],
+      })
+      .expect(201);
+    const created = createdConversationResponseSchema.parse(
+      JSON.parse(conversationResponse.text) as unknown,
+    );
+    const payload = {
+      conversation_id: created.conversation.id,
+      message_id: randomUUID(),
+      content: "Hello",
+    };
+
+    const first = await request(app)
+      .post("/message")
+      .set("authorization", `Bearer ${userId}`)
+      .send(payload)
+      .expect(201);
+    const second = await request(app)
+      .post("/message")
+      .set("authorization", `Bearer ${userId}`)
+      .send(payload)
+      .expect(200);
+
+    expect(publishedMessages).toHaveLength(2);
+    expect(publishedMessages[0]).toEqual(publishedMessages[1]);
+    expect(publishedMessages[0]).toMatchObject({
+      id: payload.message_id,
+      senderId: userId,
+      conversationId: created.conversation.id,
+      content: "Hello",
+    });
+    expect(first.body).toMatchObject({
+      message: {
+        id: payload.message_id,
+        senderId: userId,
+        conversationId: created.conversation.id,
+        content: "Hello",
+      },
+    });
+    expect(second.body).toEqual(first.body);
   });
 
   it("returns missing-conversation and non-member errors", async () => {
@@ -189,15 +253,40 @@ describeWithDatabase("conversation and message HTTP API", () => {
       .set("authorization", `Bearer ${randomUUID()}`)
       .expect(403);
   });
+});
 
-  it("allows cross-origin preflight requests", async () => {
-    const response = await request(app)
+describe("REST CORS", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("allows configured origins and omits CORS headers for other origins", async () => {
+    vi.stubEnv(
+      "CLIENT_ORIGIN",
+      "https://client.example.com, https://preview.example.com",
+    );
+    const app = createHttpApp({
+      authenticate: () => Promise.resolve(null),
+      getDatabase: () => {
+        throw new Error("Database should not be used");
+      },
+    });
+
+    const allowed = await request(app)
       .options("/conversation")
       .set("origin", "https://client.example.com")
       .set("access-control-request-method", "POST")
       .expect(204);
+    expect(allowed.headers["access-control-allow-origin"]).toBe(
+      "https://client.example.com",
+    );
 
-    expect(response.headers["access-control-allow-origin"]).toBe("*");
+    const denied = await request(app)
+      .options("/conversation")
+      .set("origin", "https://attacker.example.com")
+      .set("access-control-request-method", "POST")
+      .expect(204);
+    expect(denied.headers["access-control-allow-origin"]).toBeUndefined();
   });
 });
 

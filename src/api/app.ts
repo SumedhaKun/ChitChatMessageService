@@ -13,6 +13,7 @@ import {
   type AuthenticatedUser,
 } from "../auth.js";
 import { getDatabaseConnection, type Database } from "../db/client.js";
+import type { PublishMessageCreated } from "../kafka/publisher.js";
 import { decodeMessageCursor, encodeMessageCursor } from "./cursor.js";
 import {
   ConversationNotFoundError,
@@ -38,6 +39,7 @@ export interface HttpAppOptions {
   getDatabase?: () => Database;
   authenticate?: Authenticate;
   logger?: ApiLogger;
+  publishMessageCreated?: PublishMessageCreated;
 }
 
 interface ErrorDetail {
@@ -68,13 +70,34 @@ function sendError(
   });
 }
 
+function clientOrigins(): string[] {
+  const configured = (process.env.CLIENT_ORIGIN ?? "http://localhost:3000")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  if (
+    configured.some((origin) => /^https?:\/\/localhost(?::\d+)?$/i.test(origin))
+  ) {
+    configured.push("http://localhost:3000", "http://localhost:3001");
+  }
+
+  return [...new Set(configured)];
+}
+
 export function createHttpApp(options: HttpAppOptions = {}): express.Express {
   const app = express();
   const getDatabase = options.getDatabase ?? (() => getDatabaseConnection().db);
   const authenticate = options.authenticate ?? createSupabaseAuthenticator();
   const logger = options.logger ?? console;
+  const publishMessageCreated =
+    options.publishMessageCreated ??
+    (async (message) => {
+      const { getMessageCreatedPublisher } = await import("../kafka/client.js");
+      await getMessageCreatedPublisher().publish(message);
+    });
 
-  app.use(cors());
+  app.use(cors({ origin: clientOrigins() }));
   app.use(express.json({ limit: "16kb", strict: true }));
 
   app.get(["/health", "/api/server"], (_request, response) => {
@@ -168,6 +191,7 @@ export function createHttpApp(options: HttpAppOptions = {}): express.Express {
         result.data,
         user.id,
       );
+      await publishMessageCreated(persisted.message);
       response
         .status(persisted.created ? 201 : 200)
         .json({ message: persisted.message });
