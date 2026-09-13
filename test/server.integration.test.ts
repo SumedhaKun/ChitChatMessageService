@@ -9,6 +9,7 @@ import {
   closeMessageServer,
   createMessageServer,
   type Logger,
+  type ServerOptions,
 } from "../src/server.js";
 import { MAX_TRANSPORT_FRAME_BYTES } from "../src/protocol.js";
 
@@ -17,6 +18,26 @@ const silentLogger: Logger = {
   warn: () => undefined,
   error: () => undefined,
 };
+const authenticatedUser = {
+  id: randomUUID(),
+  email: "person@example.com",
+};
+
+const injectedDependencies = {
+  authenticate: (token: string) =>
+    Promise.resolve(token === "valid-token" ? authenticatedUser : null),
+  persistMessage: (input, senderId) =>
+    Promise.resolve({
+      created: true,
+      message: {
+        id: input.message_id ?? randomUUID(),
+        senderId,
+        conversationId: input.conversation_id,
+        content: input.content,
+        createdAt: new Date("2026-09-12T20:00:00.000Z"),
+      },
+    }),
+} satisfies Pick<ServerOptions, "authenticate" | "persistMessage">;
 
 async function waitForListening(server: WebSocketServer): Promise<void> {
   if (server.address() !== null) {
@@ -99,7 +120,11 @@ describe("WebSocket message server", () => {
   let url: string;
 
   beforeAll(async () => {
-    server = createMessageServer({ port: 0, logger: silentLogger });
+    server = createMessageServer({
+      port: 0,
+      logger: silentLogger,
+      ...injectedDependencies,
+    });
     await waitForListening(server);
     const address = server.address() as AddressInfo;
     url = `ws://127.0.0.1:${address.port}`;
@@ -112,12 +137,18 @@ describe("WebSocket message server", () => {
   it("acknowledges valid messages over a real WebSocket", async () => {
     const client = await openClient(url);
     const messageId = randomUUID();
+    const conversationId = randomUUID();
+
+    client.send(JSON.stringify({ type: "auth", accessToken: "valid-token" }));
+    await expect(receiveJson(client)).resolves.toEqual({
+      type: "auth_ack",
+    });
 
     client.send(
       JSON.stringify({
         type: "message",
         messageId,
-        conversationId: randomUUID(),
+        conversationId,
         content: "Hello over WebSocket",
       }),
     );
@@ -126,6 +157,33 @@ describe("WebSocket message server", () => {
       type: "ack",
       messageId,
       status: "accepted",
+      message: {
+        id: messageId,
+        senderId: authenticatedUser.id,
+        conversationId,
+        content: "Hello over WebSocket",
+        createdAt: "2026-09-12T20:00:00.000Z",
+      },
+    });
+    await closeClient(client);
+  });
+
+  it("rejects message frames before authentication", async () => {
+    const client = await openClient(url);
+    const messageId = randomUUID();
+    client.send(
+      JSON.stringify({
+        type: "message",
+        messageId,
+        conversationId: randomUUID(),
+        content: "Too early",
+      }),
+    );
+
+    await expect(receiveJson(client)).resolves.toMatchObject({
+      type: "error",
+      code: "AUTH_REQUIRED",
+      messageId,
     });
     await closeClient(client);
   });
@@ -159,6 +217,7 @@ describe("WebSocket message server", () => {
     const webSocketServer = createMessageServer({
       httpServer,
       logger: silentLogger,
+      ...injectedDependencies,
     });
     httpServer.listen(0, "127.0.0.1");
     await waitForListening(webSocketServer);
@@ -168,6 +227,8 @@ describe("WebSocket message server", () => {
       `ws://127.0.0.1:${address.port}/api/server`,
     );
     const messageId = randomUUID();
+    client.send(JSON.stringify({ type: "auth", accessToken: "valid-token" }));
+    await receiveJson(client);
     client.send(
       JSON.stringify({
         type: "message",

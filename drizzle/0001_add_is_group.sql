@@ -1,0 +1,1 @@
+ALTER TABLE "conversation" ADD COLUMN "is_group" boolean DEFAULT false NOT NULL;
