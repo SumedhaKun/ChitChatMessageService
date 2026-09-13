@@ -1,7 +1,7 @@
 {
   "name": "chitchat-message-service",
   "version": "1.0.0",
-  "description": "Conversation and message API with WebSocket acknowledgments",
+  "description": "Conversation and message HTTP API",
   "private": true,
   "type": "module",
   "main": "dist/server.js",
@@ -22,7 +22,7 @@
     "node": "22.x"
   },
   "keywords": [
-    "websocket",
+    "http",
     "typescript"
   ],
   "author": "",
@@ -35,7 +35,6 @@
     "drizzle-orm": "^0.45.2",
     "express": "^5.2.1",
     "postgres": "^3.4.9",
-    "ws": "^8.21.3",
     "zod": "^4.6.2"
   },
   "devDependencies": {
@@ -44,7 +43,6 @@
     "@types/express": "^5.0.6",
     "@types/node": "^22.20.2",
     "@types/supertest": "^7.2.1",
-    "@types/ws": "^8.18.1",
     "drizzle-kit": "^0.31.10",
     "eslint": "^10.10.0",
     "prettier": "^3.9.6",

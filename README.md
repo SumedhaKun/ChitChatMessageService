@@ -1,9 +1,8 @@
 # ChitChat Message Service
 
-Owns conversation membership and persisted messages in PostgreSQL. It also
-provides a WebSocket endpoint that authenticates, validates, persists, and
-acknowledges messages. REST and WebSocket identities are verified with Supabase
-JWTs; caller-provided sender IDs are never trusted.
+Owns conversation membership and persisted messages in PostgreSQL. The HTTP
+API authenticates with Supabase JWTs; caller-provided sender IDs are never
+trusted.
 
 ## Requirements
 
@@ -27,13 +26,13 @@ npm run db:migrate
 npm run dev
 ```
 
-The HTTP and WebSocket server listens on port `8080` by default. `DATABASE_URL`,
+The HTTP server listens on port `8080` by default. `DATABASE_URL`,
 `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `CLIENT_ORIGIN`, `PORT`, and `KAFKA_BROKERS`
 are loaded from `.env`. `CLIENT_ORIGIN` defaults to `http://localhost:3000`; use a
 comma-separated list to allow multiple client origins.
 
 Local Kafka listens on `localhost:9092` and seeds topic `messageCreated` with 6
-partitions. After a message is persisted over REST or WebSocket, the service
+partitions. After a message is persisted over REST, the service
 publishes it to that topic with key `conversationId`. If produce fails, the
 request fails so the client can retry; identical retries persist as HTTP 200 and
 are published again. Delivery consumers should treat `messageId` as idempotent.
@@ -150,50 +149,6 @@ API errors use a consistent envelope:
 }
 ```
 
-## WebSocket contract
-
-Connect locally to `ws://localhost:8080` or on Render to
-`wss://your-message-service.onrender.com`. The first frame must authenticate:
-
-```json
-{ "type": "auth", "accessToken": "<supabase-access-token>" }
-```
-
-Successful authentication returns `{ "type": "auth_ack" }`. Message frames
-before authentication return `AUTH_REQUIRED`. After authentication, send:
-
-```json
-{
-  "type": "message",
-  "messageId": "6d08ce26-b21c-436c-a93e-3b82e575a662",
-  "conversationId": "bf22c071-69ee-4bd5-a7c6-6d1d221bbef6",
-  "content": "Hello"
-}
-```
-
-A valid frame receives:
-
-```json
-{
-  "type": "ack",
-  "messageId": "6d08ce26-b21c-436c-a93e-3b82e575a662",
-  "status": "accepted",
-  "message": {
-    "id": "6d08ce26-b21c-436c-a93e-3b82e575a662",
-    "senderId": "493894c2-e0f6-4b24-87d1-354ecd66746d",
-    "conversationId": "bf22c071-69ee-4bd5-a7c6-6d1d221bbef6",
-    "content": "Hello",
-    "createdAt": "2026-09-12T20:00:00.000Z"
-  }
-}
-```
-
-The client `messageId` is the database primary key. Acknowledgments are sent
-only after commit and contain the canonical persisted row. Identical retries
-return the existing row; mismatched reuse returns `MESSAGE_ID_CONFLICT`.
-Text frames above 16 KiB receive `FRAME_TOO_LARGE`; frames above 32 KiB close
-with code `1009`.
-
 ## Supabase and Render
 
 `render.yaml` defines a free Render web service. Create a Blueprint from this
@@ -214,19 +169,14 @@ manually before each deployment:
 DATABASE_URL="<supabase migration connection string>" npm run db:migrate
 ```
 
-After the service is deployed, use its HTTPS origin for REST requests and its
-WSS origin for WebSocket connections:
+After the service is deployed, use its HTTPS origin for REST requests:
 
 ```sh
 NEXT_PUBLIC_MESSAGE_SERVICE_URL=https://your-message-service.onrender.com
-NEXT_PUBLIC_MESSAGE_SERVER_URL=wss://your-message-service.onrender.com
 ```
 
 Render free services spin down after 15 minutes without inbound HTTP requests
-or WebSocket messages and can take about a minute to wake. Render can also
-replace instances during deploys or maintenance, so clients must reconnect with
-backoff. Use an always-on Render plan before depending on real-time
-availability.
+and can take about a minute to wake.
 
 The Vercel adapter and `vercel.json` remain available as a rollback path.
 
@@ -234,5 +184,5 @@ The Vercel adapter and `vercel.json` remain available as a rollback path.
 
 `GET /health` and `GET /api/server` return `{ "status": "ok" }`. The service
 logs lifecycle and failure metadata without logging message content. Local
-`SIGINT` or `SIGTERM` shutdown closes HTTP, WebSocket, database, and Kafka
+`SIGINT` or `SIGTERM` shutdown closes HTTP, database, and Kafka
 producer resources.

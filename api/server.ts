@@ -1,7 +1,7 @@
 import "dotenv/config";
 
-import { createServiceServers } from "../src/server.js";
+import { createMessageHttpServer } from "../src/server.js";
 
-const { httpServer: server } = createServiceServers();
+const server = createMessageHttpServer();
 
 export default server;
