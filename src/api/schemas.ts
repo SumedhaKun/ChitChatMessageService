@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { MAX_CONTENT_LENGTH } from "../protocol.js";
+export const MAX_CONTENT_LENGTH = 4_000;
 
 const httpUrlSchema = z
   .url()
