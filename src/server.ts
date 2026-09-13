@@ -1,10 +1,24 @@
+import "dotenv/config";
+
 import { randomUUID } from "node:crypto";
-import type { Server as HttpServer } from "node:http";
+import { createServer, type Server as HttpServer } from "node:http";
 import { pathToFileURL } from "node:url";
 
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 
-import { handleFrame } from "./message-handler.js";
+import { createHttpApp } from "./api/app.js";
+import { createMessage } from "./api/repository.js";
+import {
+  createSupabaseAuthenticator,
+  type Authenticate,
+  type AuthenticatedUser,
+} from "./auth.js";
+import {
+  closeDatabaseConnection,
+  getDatabaseConnection,
+  type Database,
+} from "./db/client.js";
+import { handleFrame, type PersistMessage } from "./message-handler.js";
 import { MAX_TRANSPORT_FRAME_BYTES } from "./protocol.js";
 
 const DEFAULT_PORT = 8_080;
@@ -20,6 +34,21 @@ export interface ServerOptions {
   port?: number;
   httpServer?: HttpServer;
   logger?: Logger;
+  authenticate?: Authenticate;
+  getDatabase?: () => Database;
+  persistMessage?: PersistMessage;
+}
+
+export interface ServiceServers {
+  httpServer: HttpServer;
+  webSocketServer: WebSocketServer;
+}
+
+export interface ServiceServerOptions {
+  logger?: Logger;
+  authenticate?: Authenticate;
+  getDatabase?: () => Database;
+  persistMessage?: PersistMessage;
 }
 
 export function readPort(value = process.env.PORT): number {
@@ -49,6 +78,12 @@ export function createMessageServer(
   options: ServerOptions = {},
 ): WebSocketServer {
   const logger = options.logger ?? console;
+  const authenticate = options.authenticate ?? createSupabaseAuthenticator();
+  const getDatabase = options.getDatabase ?? (() => getDatabaseConnection().db);
+  const persistMessage =
+    options.persistMessage ??
+    (async (input, senderId) =>
+      await createMessage(getDatabase(), input, senderId));
   const server =
     options.httpServer === undefined
       ? new WebSocketServer({
@@ -72,25 +107,55 @@ export function createMessageServer(
 
   server.on("connection", (socket) => {
     const connectionId = randomUUID();
+    let authenticatedUser: AuthenticatedUser | undefined;
+    let processing = Promise.resolve();
     logger.info({ event: "connection_opened", connectionId });
 
     socket.on("message", (data, isBinary) => {
-      const response = handleFrame(normalizeRawData(data), isBinary);
+      processing = processing
+        .then(async () => {
+          const result = await handleFrame(
+            normalizeRawData(data),
+            isBinary,
+            authenticatedUser,
+            {
+              authenticate,
+              persistMessage,
+            },
+          );
+          authenticatedUser = result.authenticatedUser ?? authenticatedUser;
 
-      if (response.type === "error") {
-        logger.warn({
-          event: "message_rejected",
-          connectionId,
-          code: response.code,
-          ...(response.messageId === undefined
-            ? {}
-            : { messageId: response.messageId }),
+          if (result.response.type === "error") {
+            logger.warn({
+              event: "message_rejected",
+              connectionId,
+              code: result.response.code,
+              ...(result.response.messageId === undefined
+                ? {}
+                : { messageId: result.response.messageId }),
+            });
+          }
+
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify(result.response));
+          }
+        })
+        .catch((error: unknown) => {
+          logger.error({
+            event: "message_processing_failed",
+            connectionId,
+            error: error instanceof Error ? error.message : "Unknown error",
+          });
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(
+              JSON.stringify({
+                type: "error",
+                code: "INTERNAL_ERROR",
+                message: "Internal server error",
+              }),
+            );
+          }
         });
-      }
-
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify(response));
-      }
     });
 
     socket.on("error", (error) => {
@@ -111,6 +176,27 @@ export function createMessageServer(
   });
 
   return server;
+}
+
+export function createServiceServers(
+  options: ServiceServerOptions = {},
+): ServiceServers {
+  const logger = options.logger ?? console;
+  const authenticate = options.authenticate ?? createSupabaseAuthenticator();
+  const getDatabase = options.getDatabase ?? (() => getDatabaseConnection().db);
+  const httpServer = createServer(
+    createHttpApp({ logger, authenticate, getDatabase }),
+  );
+  const webSocketServer = createMessageServer({
+    httpServer,
+    logger,
+    authenticate,
+    getDatabase,
+    ...(options.persistMessage === undefined
+      ? {}
+      : { persistMessage: options.persistMessage }),
+  });
+  return { httpServer, webSocketServer };
 }
 
 export async function closeMessageServer(
@@ -139,9 +225,29 @@ export async function closeMessageServer(
   });
 }
 
+export async function closeServiceServers(
+  servers: ServiceServers,
+): Promise<void> {
+  await closeMessageServer(servers.webSocketServer);
+
+  if (servers.httpServer.listening) {
+    await new Promise<void>((resolve, reject) => {
+      servers.httpServer.close((error) => {
+        if (error === undefined) {
+          resolve();
+        } else {
+          reject(error);
+        }
+      });
+    });
+  }
+
+  await closeDatabaseConnection();
+}
+
 function run(): void {
   const logger: Logger = console;
-  const server = createMessageServer({ logger });
+  const servers = createServiceServers({ logger });
   let shuttingDown = false;
 
   const shutdown = (signal: NodeJS.Signals): void => {
@@ -151,7 +257,7 @@ function run(): void {
     shuttingDown = true;
     logger.info({ event: "server_shutdown_started", signal });
 
-    void closeMessageServer(server)
+    void closeServiceServers(servers)
       .then(() => {
         logger.info({ event: "server_shutdown_complete" });
       })
@@ -166,6 +272,8 @@ function run(): void {
 
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
+
+  servers.httpServer.listen(readPort());
 }
 
 const entrypoint = process.argv[1];

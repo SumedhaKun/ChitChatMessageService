@@ -1,12 +1,7 @@
-import { createServer } from "node:http";
+import "dotenv/config";
 
-import { createMessageServer } from "../src/server.js";
+import { createServiceServers } from "../src/server.js";
 
-const server = createServer((_request, response) => {
-  response.writeHead(200, { "content-type": "application/json" });
-  response.end(JSON.stringify({ status: "ok" }));
-});
-
-createMessageServer({ httpServer: server });
+const { httpServer: server } = createServiceServers();
 
 export default server;

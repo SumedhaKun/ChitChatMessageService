@@ -6,5 +6,27 @@
     "api/server.ts": {
       "maxDuration": 300
     }
-  }
+  },
+  "rewrites": [
+    {
+      "source": "/health",
+      "destination": "/api/server"
+    },
+    {
+      "source": "/conversation",
+      "destination": "/api/server"
+    },
+    {
+      "source": "/conversations",
+      "destination": "/api/server"
+    },
+    {
+      "source": "/message",
+      "destination": "/api/server"
+    },
+    {
+      "source": "/conversation/:id/messages",
+      "destination": "/api/server"
+    }
+  ]
 }
