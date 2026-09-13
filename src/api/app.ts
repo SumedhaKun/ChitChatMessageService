@@ -68,13 +68,28 @@ function sendError(
   });
 }
 
+function clientOrigins(): string[] {
+  const configured = (process.env.CLIENT_ORIGIN ?? "http://localhost:3000")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  if (
+    configured.some((origin) => /^https?:\/\/localhost(?::\d+)?$/i.test(origin))
+  ) {
+    configured.push("http://localhost:3000", "http://localhost:3001");
+  }
+
+  return [...new Set(configured)];
+}
+
 export function createHttpApp(options: HttpAppOptions = {}): express.Express {
   const app = express();
   const getDatabase = options.getDatabase ?? (() => getDatabaseConnection().db);
   const authenticate = options.authenticate ?? createSupabaseAuthenticator();
   const logger = options.logger ?? console;
 
-  app.use(cors());
+  app.use(cors({ origin: clientOrigins() }));
   app.use(express.json({ limit: "16kb", strict: true }));
 
   app.get(["/health", "/api/server"], (_request, response) => {

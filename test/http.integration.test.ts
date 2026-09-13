@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto";
 
 import request from "supertest";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { z } from "zod";
 
 import { createHttpApp } from "../src/api/app.js";
@@ -189,15 +197,40 @@ describeWithDatabase("conversation and message HTTP API", () => {
       .set("authorization", `Bearer ${randomUUID()}`)
       .expect(403);
   });
+});
 
-  it("allows cross-origin preflight requests", async () => {
-    const response = await request(app)
+describe("REST CORS", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("allows configured origins and omits CORS headers for other origins", async () => {
+    vi.stubEnv(
+      "CLIENT_ORIGIN",
+      "https://client.example.com, https://preview.example.com",
+    );
+    const app = createHttpApp({
+      authenticate: () => Promise.resolve(null),
+      getDatabase: () => {
+        throw new Error("Database should not be used");
+      },
+    });
+
+    const allowed = await request(app)
       .options("/conversation")
       .set("origin", "https://client.example.com")
       .set("access-control-request-method", "POST")
       .expect(204);
+    expect(allowed.headers["access-control-allow-origin"]).toBe(
+      "https://client.example.com",
+    );
 
-    expect(response.headers["access-control-allow-origin"]).toBe("*");
+    const denied = await request(app)
+      .options("/conversation")
+      .set("origin", "https://attacker.example.com")
+      .set("access-control-request-method", "POST")
+      .expect(204);
+    expect(denied.headers["access-control-allow-origin"]).toBeUndefined();
   });
 });
 

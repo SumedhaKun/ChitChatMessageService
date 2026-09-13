@@ -25,7 +25,9 @@ npm run dev
 ```
 
 The HTTP and WebSocket server listens on port `8080` by default. `DATABASE_URL`,
-`SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `PORT` are loaded from `.env`.
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `CLIENT_ORIGIN`, and `PORT` are loaded
+from `.env`. `CLIENT_ORIGIN` defaults to `http://localhost:3000`; use a
+comma-separated list to allow multiple client origins.
 
 Useful commands:
 
@@ -187,7 +189,8 @@ with code `1009`.
 
 `render.yaml` defines a free Render web service. Create a Blueprint from this
 repository and provide `DATABASE_URL`, `SUPABASE_URL`, and
-`SUPABASE_ANON_KEY` when prompted. Render supplies `PORT`; do not set it
+`SUPABASE_ANON_KEY` when prompted. Set `CLIENT_ORIGIN` to the production Vercel
+client origin without a trailing slash. Render supplies `PORT`; do not set it
 manually. For runtime traffic, use the Supabase transaction-pooler connection
 string with SSL enabled.
 
