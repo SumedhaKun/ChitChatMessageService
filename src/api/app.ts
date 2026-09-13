@@ -13,6 +13,7 @@ import {
   type AuthenticatedUser,
 } from "../auth.js";
 import { getDatabaseConnection, type Database } from "../db/client.js";
+import type { PublishMessageCreated } from "../kafka/publisher.js";
 import { decodeMessageCursor, encodeMessageCursor } from "./cursor.js";
 import {
   ConversationNotFoundError,
@@ -38,6 +39,7 @@ export interface HttpAppOptions {
   getDatabase?: () => Database;
   authenticate?: Authenticate;
   logger?: ApiLogger;
+  publishMessageCreated?: PublishMessageCreated;
 }
 
 interface ErrorDetail {
@@ -88,6 +90,12 @@ export function createHttpApp(options: HttpAppOptions = {}): express.Express {
   const getDatabase = options.getDatabase ?? (() => getDatabaseConnection().db);
   const authenticate = options.authenticate ?? createSupabaseAuthenticator();
   const logger = options.logger ?? console;
+  const publishMessageCreated =
+    options.publishMessageCreated ??
+    (async (message) => {
+      const { getMessageCreatedPublisher } = await import("../kafka/client.js");
+      await getMessageCreatedPublisher().publish(message);
+    });
 
   app.use(cors({ origin: clientOrigins() }));
   app.use(express.json({ limit: "16kb", strict: true }));
@@ -183,6 +191,7 @@ export function createHttpApp(options: HttpAppOptions = {}): express.Express {
         result.data,
         user.id,
       );
+      await publishMessageCreated(persisted.message);
       response
         .status(persisted.created ? 201 : 200)
         .json({ message: persisted.message });

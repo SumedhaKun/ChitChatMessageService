@@ -18,7 +18,7 @@ import {
   type DatabaseConnection,
 } from "../src/db/client.js";
 import { runDatabaseMigrations } from "../src/db/migrations.js";
-import { conversation } from "../src/db/schema.js";
+import { conversation, type MessageRow } from "../src/db/schema.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const describeWithDatabase =
@@ -47,6 +47,7 @@ const messagePageResponseSchema = z.object({
 describeWithDatabase("conversation and message HTTP API", () => {
   let connection: DatabaseConnection;
   let app: ReturnType<typeof createHttpApp>;
+  const publishedMessages: MessageRow[] = [];
 
   beforeAll(async () => {
     connection = createDatabaseConnection(databaseUrl ?? "");
@@ -58,10 +59,15 @@ describeWithDatabase("conversation and message HTTP API", () => {
           id: token,
           email: "person@example.com",
         }),
+      publishMessageCreated: (message) => {
+        publishedMessages.push(message);
+        return Promise.resolve();
+      },
     });
   });
 
   afterEach(async () => {
+    publishedMessages.length = 0;
     await connection.db.delete(conversation);
   });
 
@@ -124,6 +130,56 @@ describeWithDatabase("conversation and message HTTP API", () => {
         memberIds: [userId],
       }),
     ]);
+  });
+
+  it("publishes messageCreated after persist and republishes identical retries", async () => {
+    const userId = randomUUID();
+    const conversationResponse = await request(app)
+      .post("/conversation")
+      .set("authorization", `Bearer ${userId}`)
+      .send({
+        name: "Friends",
+        is_group: true,
+        user_ids: [userId],
+      })
+      .expect(201);
+    const created = createdConversationResponseSchema.parse(
+      JSON.parse(conversationResponse.text) as unknown,
+    );
+    const payload = {
+      conversation_id: created.conversation.id,
+      message_id: randomUUID(),
+      content: "Hello",
+    };
+
+    const first = await request(app)
+      .post("/message")
+      .set("authorization", `Bearer ${userId}`)
+      .send(payload)
+      .expect(201);
+    const second = await request(app)
+      .post("/message")
+      .set("authorization", `Bearer ${userId}`)
+      .send(payload)
+      .expect(200);
+
+    expect(publishedMessages).toHaveLength(2);
+    expect(publishedMessages[0]).toEqual(publishedMessages[1]);
+    expect(publishedMessages[0]).toMatchObject({
+      id: payload.message_id,
+      senderId: userId,
+      conversationId: created.conversation.id,
+      content: "Hello",
+    });
+    expect(first.body).toMatchObject({
+      message: {
+        id: payload.message_id,
+        senderId: userId,
+        conversationId: created.conversation.id,
+        content: "Hello",
+      },
+    });
+    expect(second.body).toEqual(first.body);
   });
 
   it("returns missing-conversation and non-member errors", async () => {

@@ -10,6 +10,8 @@ JWTs; caller-provided sender IDs are never trusted.
 - Node.js 22
 - npm
 - PostgreSQL 16 or a Supabase Postgres database
+- A Kafka broker: local Docker for development, or Confluent Cloud cluster
+  `chitchat_cluster` for production
 
 ## Local setup
 
@@ -20,14 +22,21 @@ database at `localhost:5432`.
 nvm use
 npm install
 cp .env.example .env
+docker compose up -d
 npm run db:migrate
 npm run dev
 ```
 
 The HTTP and WebSocket server listens on port `8080` by default. `DATABASE_URL`,
-`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `CLIENT_ORIGIN`, and `PORT` are loaded
-from `.env`. `CLIENT_ORIGIN` defaults to `http://localhost:3000`; use a
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `CLIENT_ORIGIN`, `PORT`, and `KAFKA_BROKERS`
+are loaded from `.env`. `CLIENT_ORIGIN` defaults to `http://localhost:3000`; use a
 comma-separated list to allow multiple client origins.
+
+Local Kafka listens on `localhost:9092` and seeds topic `messageCreated` with 6
+partitions. After a message is persisted over REST or WebSocket, the service
+publishes it to that topic with key `conversationId`. If produce fails, the
+request fails so the client can retry; identical retries persist as HTTP 200 and
+are published again. Delivery consumers should treat `messageId` as idempotent.
 
 Useful commands:
 
@@ -188,11 +197,15 @@ with code `1009`.
 ## Supabase and Render
 
 `render.yaml` defines a free Render web service. Create a Blueprint from this
-repository and provide `DATABASE_URL`, `SUPABASE_URL`, and
-`SUPABASE_ANON_KEY` when prompted. Set `CLIENT_ORIGIN` to the production Vercel
-client origin without a trailing slash. Render supplies `PORT`; do not set it
-manually. For runtime traffic, use the Supabase transaction-pooler connection
-string with SSL enabled.
+repository and provide `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`,
+`CLIENT_ORIGIN`, `KAFKA_BROKERS`, `KAFKA_API_KEY`, and `KAFKA_API_SECRET` when
+prompted. Set `CLIENT_ORIGIN` to the production Vercel client origin without a
+trailing slash. Point Kafka at Confluent Cloud cluster `chitchat_cluster`: copy
+the bootstrap server into `KAFKA_BROKERS`, keep `KAFKA_SSL=true`, and use a
+cluster API key. Create topic `messageCreated` on that cluster with multiple
+partitions before deploying; Confluent Cloud does not auto-create topics. Render
+supplies `PORT`; do not set it manually. For runtime traffic, use the Supabase
+transaction-pooler connection string with SSL enabled.
 
 Free Render services do not support pre-deploy commands, so apply migrations
 manually before each deployment:
@@ -221,4 +234,5 @@ The Vercel adapter and `vercel.json` remain available as a rollback path.
 
 `GET /health` and `GET /api/server` return `{ "status": "ok" }`. The service
 logs lifecycle and failure metadata without logging message content. Local
-`SIGINT` or `SIGTERM` shutdown closes HTTP, WebSocket, and database resources.
+`SIGINT` or `SIGTERM` shutdown closes HTTP, WebSocket, database, and Kafka
+producer resources.
