@@ -12,7 +12,11 @@ import {
   type MessageRow,
 } from "../db/schema.js";
 import type { MessageCursor } from "./cursor.js";
-import type { CreateConversationInput, CreateMessageInput } from "./schemas.js";
+import type {
+  CreateConversationInput,
+  CreateMessageInput,
+  UpdateLastSeenMessageInput,
+} from "./schemas.js";
 
 export class ConversationNotFoundError extends Error {
   constructor() {
@@ -32,6 +36,20 @@ export class MessageIdConflictError extends Error {
   constructor() {
     super("Message ID is already used by a different message");
     this.name = "MessageIdConflictError";
+  }
+}
+
+export class MessageNotFoundError extends Error {
+  constructor() {
+    super("Message not found in conversation");
+    this.name = "MessageNotFoundError";
+  }
+}
+
+export class NotDirectConversationError extends Error {
+  constructor() {
+    super("Read receipts are only available for direct conversations");
+    this.name = "NotDirectConversationError";
   }
 }
 
@@ -259,4 +277,108 @@ export async function listConversationMessages(
     messages: rows.slice(0, limit),
     hasMore: rows.length > limit,
   };
+}
+
+export async function updateLastSeenMessage(
+  db: Database,
+  conversationId: string,
+  userId: string,
+  input: UpdateLastSeenMessageInput,
+): Promise<ConversationMemberRow> {
+  const [existingConversation] = await db
+    .select({ id: conversation.id })
+    .from(conversation)
+    .where(eq(conversation.id, conversationId))
+    .limit(1);
+
+  if (existingConversation === undefined) {
+    throw new ConversationNotFoundError();
+  }
+
+  const [membership] = await db
+    .select({ userId: conversationMembers.userId })
+    .from(conversationMembers)
+    .where(
+      and(
+        eq(conversationMembers.conversationId, conversationId),
+        eq(conversationMembers.userId, userId),
+      ),
+    )
+    .limit(1);
+
+  if (membership === undefined) {
+    throw new SenderNotMemberError();
+  }
+
+  const [existingMessage] = await db
+    .select({ id: message.id })
+    .from(message)
+    .where(
+      and(
+        eq(message.id, input.message_id),
+        eq(message.conversationId, conversationId),
+      ),
+    )
+    .limit(1);
+
+  if (existingMessage === undefined) {
+    throw new MessageNotFoundError();
+  }
+
+  const [updatedMember] = await db
+    .update(conversationMembers)
+    .set({ lastSeenMessage: input.message_id })
+    .where(
+      and(
+        eq(conversationMembers.conversationId, conversationId),
+        eq(conversationMembers.userId, userId),
+      ),
+    )
+    .returning();
+
+  if (updatedMember === undefined) {
+    throw new Error("Last seen update returned no row");
+  }
+
+  return updatedMember;
+}
+
+export async function getOtherParticipantLastSeenMessage(
+  db: Database,
+  conversationId: string,
+  callerId: string,
+): Promise<string | null> {
+  const [existingConversation] = await db
+    .select({ id: conversation.id, isGroup: conversation.isGroup })
+    .from(conversation)
+    .where(eq(conversation.id, conversationId))
+    .limit(1);
+
+  if (existingConversation === undefined) {
+    throw new ConversationNotFoundError();
+  }
+
+  if (existingConversation.isGroup) {
+    throw new NotDirectConversationError();
+  }
+
+  const members = await db
+    .select({
+      userId: conversationMembers.userId,
+      lastSeenMessage: conversationMembers.lastSeenMessage,
+    })
+    .from(conversationMembers)
+    .where(eq(conversationMembers.conversationId, conversationId));
+
+  const callerMembership = members.find((member) => member.userId === callerId);
+  if (callerMembership === undefined) {
+    throw new SenderNotMemberError();
+  }
+
+  const otherMember = members.find((member) => member.userId !== callerId);
+  if (otherMember === undefined) {
+    throw new NotDirectConversationError();
+  }
+
+  return otherMember.lastSeenMessage;
 }

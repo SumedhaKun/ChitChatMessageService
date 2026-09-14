@@ -235,6 +235,121 @@ describeWithDatabase("conversation and message HTTP API", () => {
       .expect(400);
   });
 
+  it("returns the other participant's last_seen_message for direct conversations", async () => {
+    const callerId = randomUUID();
+    const otherId = randomUUID();
+    const conversationResponse = await request(app)
+      .post("/conversation")
+      .set("authorization", `Bearer ${callerId}`)
+      .send({
+        is_group: false,
+        user_ids: [otherId],
+      })
+      .expect(201);
+    const created = createdConversationResponseSchema.parse(
+      JSON.parse(conversationResponse.text) as unknown,
+    );
+
+    const messageResponse = await request(app)
+      .post("/message")
+      .set("authorization", `Bearer ${callerId}`)
+      .send({
+        conversation_id: created.conversation.id,
+        message_id: randomUUID(),
+        content: "Hello",
+      })
+      .expect(201);
+    const messageId = (messageResponse.body as { message: { id: string } }).message
+      .id;
+
+    await request(app)
+      .put(`/conversation/${created.conversation.id}/last-seen`)
+      .set("authorization", `Bearer ${otherId}`)
+      .send({ message_id: messageId })
+      .expect(200);
+
+    const seenResponse = await request(app)
+      .get(`/conversation/${created.conversation.id}/other-last-seen`)
+      .set("authorization", `Bearer ${callerId}`)
+      .expect(200);
+
+    expect(seenResponse.body).toEqual({ last_seen_message: messageId });
+
+    const callerSeenResponse = await request(app)
+      .get(`/conversation/${created.conversation.id}/other-last-seen`)
+      .set("authorization", `Bearer ${otherId}`)
+      .expect(200);
+
+    expect(callerSeenResponse.body).toEqual({ last_seen_message: null });
+  });
+
+  it("rejects other-last-seen for group conversations", async () => {
+    const userId = randomUUID();
+    const conversationResponse = await request(app)
+      .post("/conversation")
+      .set("authorization", `Bearer ${userId}`)
+      .send({
+        name: "Friends",
+        is_group: true,
+        user_ids: [randomUUID()],
+      })
+      .expect(201);
+    const created = createdConversationResponseSchema.parse(
+      JSON.parse(conversationResponse.text) as unknown,
+    );
+
+    await request(app)
+      .get(`/conversation/${created.conversation.id}/other-last-seen`)
+      .set("authorization", `Bearer ${userId}`)
+      .expect(400, {
+        error: {
+          code: "NOT_DIRECT_CONVERSATION",
+          message: "Read receipts are only available for direct conversations",
+        },
+      });
+  });
+
+  it("updates last_seen_message for the authenticated member", async () => {
+    const userId = randomUUID();
+    const conversationResponse = await request(app)
+      .post("/conversation")
+      .set("authorization", `Bearer ${userId}`)
+      .send({
+        is_group: false,
+        user_ids: [randomUUID()],
+      })
+      .expect(201);
+    const created = createdConversationResponseSchema.parse(
+      JSON.parse(conversationResponse.text) as unknown,
+    );
+
+    const messageResponse = await request(app)
+      .post("/message")
+      .set("authorization", `Bearer ${userId}`)
+      .send({
+        conversation_id: created.conversation.id,
+        message_id: randomUUID(),
+        content: "Hello",
+      })
+      .expect(201);
+    const messageId = (messageResponse.body as { message: { id: string } }).message
+      .id;
+
+    const seenResponse = await request(app)
+      .put(`/conversation/${created.conversation.id}/last-seen`)
+      .set("authorization", `Bearer ${userId}`)
+      .send({ message_id: messageId })
+      .expect(200);
+
+    expect(seenResponse.body).toEqual({
+      member: expect.objectContaining({
+        userId,
+        conversationId: created.conversation.id,
+        lastSeenMessage: messageId,
+      }),
+    });
+  });
+
   it("requires REST bearer authentication and message-list membership", async () => {
     await request(app).get("/conversations").expect(401);
 
