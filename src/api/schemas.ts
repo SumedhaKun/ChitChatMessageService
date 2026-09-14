@@ -39,5 +39,14 @@ export const messageListQuerySchema = z
   })
   .strict();
 
+export const updateLastSeenMessageSchema = z
+  .object({
+    message_id: z.uuid(),
+  })
+  .strict();
+
 export type CreateConversationInput = z.infer<typeof createConversationSchema>;
 export type CreateMessageInput = z.infer<typeof createMessageSchema>;
+export type UpdateLastSeenMessageInput = z.infer<
+  typeof updateLastSeenMessageSchema
+>;

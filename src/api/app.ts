@@ -19,16 +19,21 @@ import {
   ConversationNotFoundError,
   createConversation,
   createMessage,
+  getOtherParticipantLastSeenMessage,
   listConversationMessages,
   listUserConversations,
   MessageIdConflictError,
+  MessageNotFoundError,
+  NotDirectConversationError,
   SenderNotMemberError,
+  updateLastSeenMessage,
 } from "./repository.js";
 import {
   conversationIdSchema,
   createConversationSchema,
   createMessageSchema,
   messageListQuerySchema,
+  updateLastSeenMessageSchema,
 } from "./schemas.js";
 
 export interface ApiLogger {
@@ -206,6 +211,93 @@ export function createHttpApp(options: HttpAppOptions = {}): express.Express {
       }
       if (error instanceof MessageIdConflictError) {
         sendError(response, 409, "MESSAGE_ID_CONFLICT", error.message);
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.get("/conversation/:id/other-last-seen", async (request, response) => {
+    const user = await authenticatedUser(request, response);
+    if (user === null) return;
+
+    const idResult = conversationIdSchema.safeParse(request.params.id);
+    if (!idResult.success) {
+      sendError(
+        response,
+        400,
+        "VALIDATION_ERROR",
+        "Path parameter is invalid",
+        validationDetails(idResult.error),
+      );
+      return;
+    }
+
+    try {
+      const lastSeenMessage = await getOtherParticipantLastSeenMessage(
+        getDatabase(),
+        idResult.data,
+        user.id,
+      );
+      response.json({ last_seen_message: lastSeenMessage });
+    } catch (error) {
+      if (error instanceof ConversationNotFoundError) {
+        sendError(response, 404, "CONVERSATION_NOT_FOUND", error.message);
+        return;
+      }
+      if (error instanceof SenderNotMemberError) {
+        sendError(response, 403, "SENDER_NOT_MEMBER", error.message);
+        return;
+      }
+      if (error instanceof NotDirectConversationError) {
+        sendError(response, 400, "NOT_DIRECT_CONVERSATION", error.message);
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.put("/conversation/:id/last-seen", async (request, response) => {
+    const user = await authenticatedUser(request, response);
+    if (user === null) return;
+
+    const idResult = conversationIdSchema.safeParse(request.params.id);
+    const bodyResult = updateLastSeenMessageSchema.safeParse(request.body);
+
+    if (!idResult.success || !bodyResult.success) {
+      const details = [
+        ...(idResult.success ? [] : validationDetails(idResult.error)),
+        ...(bodyResult.success ? [] : validationDetails(bodyResult.error)),
+      ];
+      sendError(
+        response,
+        400,
+        "VALIDATION_ERROR",
+        "Path or request body is invalid",
+        details,
+      );
+      return;
+    }
+
+    try {
+      const member = await updateLastSeenMessage(
+        getDatabase(),
+        idResult.data,
+        user.id,
+        bodyResult.data,
+      );
+      response.json({ member });
+    } catch (error) {
+      if (error instanceof ConversationNotFoundError) {
+        sendError(response, 404, "CONVERSATION_NOT_FOUND", error.message);
+        return;
+      }
+      if (error instanceof SenderNotMemberError) {
+        sendError(response, 403, "SENDER_NOT_MEMBER", error.message);
+        return;
+      }
+      if (error instanceof MessageNotFoundError) {
+        sendError(response, 404, "MESSAGE_NOT_FOUND", error.message);
         return;
       }
       throw error;
