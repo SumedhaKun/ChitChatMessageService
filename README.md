@@ -1,8 +1,10 @@
 # ChitChat Message Service
 
-Owns conversation membership and persisted messages in PostgreSQL. The HTTP
+Owns conversation membership, persisted messages in PostgreSQL, and publishes them to the Kafka 'messageCreated' topic. The HTTP
 API authenticates with Supabase JWTs; caller-provided sender IDs are never
 trusted.
+
+Link: [https://chitchatmessageservice.onrender.com](https://chitchatmessageservice.onrender.com)
 
 ## Requirements
 
@@ -149,18 +151,26 @@ API errors use a consistent envelope:
 }
 ```
 
-## Supabase and Render
-
-`render.yaml` defines a free Render web service. Create a Blueprint from this
-repository and provide `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`,
-`CLIENT_ORIGIN`, `KAFKA_BROKERS`, `KAFKA_API_KEY`, and `KAFKA_API_SECRET` when
-prompted. Set `CLIENT_ORIGIN` to the production Vercel client origin without a
-trailing slash. Point Kafka at Confluent Cloud cluster `chitchat_cluster`: copy
-the bootstrap server into `KAFKA_BROKERS`, keep `KAFKA_SSL=true`, and use a
-cluster API key. Create topic `messageCreated` on that cluster with multiple
-partitions before deploying; Confluent Cloud does not auto-create topics. Render
-supplies `PORT`; do not set it manually. For runtime traffic, use the Supabase
-transaction-pooler connection string with SSL enabled.
+### Supabase and Render
+ 
+`render.yaml` defines a free Render web service. Deploy it as follows:
+ 
+1. **Create a Blueprint** from this repository in Render.
+2. **Provide the following environment variables** when prompted:
+   | Variable | Notes |
+   |---|---|
+   | `DATABASE_URL` | Use the Supabase **transaction-pooler** connection string, with SSL enabled, for runtime traffic |
+   | `SUPABASE_URL` | Your Supabase project URL |
+   | `SUPABASE_ANON_KEY` | Your Supabase anon/public key |
+   | `CLIENT_ORIGIN` | The production Vercel client origin — **no trailing slash** |
+   | `KAFKA_BROKERS` | Bootstrap server from your Confluent Cloud cluster |
+   | `KAFKA_API_KEY` | Confluent Cloud cluster API key |
+   | `KAFKA_API_SECRET` | Confluent Cloud cluster API secret |
+   | `KAFKA_SSL` | Set to `true` |
+   Don't set `PORT` — Render supplies it automatically.
+3. **Set up Kafka on Confluent Cloud** before deploying:
+   - Point it at cluster `chitchat_cluster`.
+   - Create the topic `messageCreated` with multiple partitions manually — **Confluent Cloud does not auto-create topics**, so the service will fail to publish until this exists.
 
 Free Render services do not support pre-deploy commands, so apply migrations
 manually before each deployment:
